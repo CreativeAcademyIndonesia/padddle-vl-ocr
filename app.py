@@ -41,6 +41,7 @@ async def startup_event():
 
 def create_response(success: bool, data: Any = None, message: str = "") -> Dict[str, Any]:
     """Helper untuk membuat format response standar"""
+    print("Membuat Response...")
     return {
         "error": not success,
         "success": success,
@@ -52,6 +53,7 @@ def process_pdf_pages(input_path: str, pages_indices: List[int]) -> str:
     """
     Membuat file PDF baru yang hanya berisi halaman-halaman yang diminta.
     """
+    print("Memproses halaman PDF...")
     try:
         reader = PdfReader(input_path)
         writer = PdfWriter()
@@ -80,6 +82,7 @@ def process_pdf_pages(input_path: str, pages_indices: List[int]) -> str:
 @app.get("/health")
 async def health_check():
     """Endpoint untuk cek kesehatan service"""
+    print("Health check...")
     return create_response(success=True, message="Service is healthy and ready")
 
 @app.post("/document-parsing")
@@ -91,6 +94,7 @@ async def document_parsing(
     """
     Endpoint parsing dokumen dengan output JSON + URL Download File Markdown.
     """
+    print("Document parsing...")
     temp_file_path = None
     processed_file_path = None
     
@@ -149,10 +153,12 @@ async def document_parsing(
         output_filepath = os.path.join(OUTPUT_DIR, output_filename)
 
         # Tulis ke file fisik
+        print("Menyimpan File Markdown...")
         with open(output_filepath, "w", encoding="utf-8") as f:
             f.write(full_markdown_text)
 
         # Generate Full Download URL
+        print("Generate Full Download URL...")
         # base_url mengambil scheme (http/https) dan host:port dari request
         base_url = str(request.base_url).rstrip("/")
         download_url = f"{base_url}/outputs/{output_filename}"
@@ -177,7 +183,7 @@ async def document_parsing(
         )
         
     finally:
-        # Bersihkan file temporary input (tapi file output di folder /outputs tetap disimpan agar bisa didownload)
+        print("Bersihkan file temporary...")
         paths_to_clean = [p for p in [temp_file_path, processed_file_path] if p]
         for path in paths_to_clean:
             if path and os.path.exists(path):
