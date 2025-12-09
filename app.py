@@ -9,7 +9,25 @@ import json
 import logging
 import datetime
 import time
-from typing import List, Optional
+from typing import List, Optional, Any
+
+# Setup Logging
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+logger = logging.getLogger("OCR_API")
+
+def log_process(msg: str):
+    timestamp = datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+    logger.info(f"[{timestamp}] {msg}")
+
+# Helper response standard
+def create_response(success: bool, data: Any = None, message: str = "", error_code: int = 200):
+    content = {
+        "error": not success,
+        "success": success,
+        "data": data,
+        "message": message
+    }
+    return JSONResponse(content=content, status_code=error_code)
 
 PADDLE_API_KEY = "332100185"
 app = FastAPI()
