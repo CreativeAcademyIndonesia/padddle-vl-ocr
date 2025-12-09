@@ -1,16 +1,26 @@
 import uvicorn
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from paddleocr import PaddleOCRVL
 import os
 import shutil
 import tempfile
 import json
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Optional, Dict, List
 from pypdf import PdfReader, PdfWriter
 
 app = FastAPI(title="PaddleOCR-VL API")
+
+# Setup folder untuk output file yang bisa didownload
+OUTPUT_DIR = "outputs"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Mount folder outputs agar bisa diakses via URL (misal: http://host/outputs/filename.md)
+app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
 
 # Global variable untuk pipeline
 pipeline = None
@@ -41,8 +51,6 @@ def create_response(success: bool, data: Any = None, message: str = "") -> Dict[
 def process_pdf_pages(input_path: str, pages_indices: List[int]) -> str:
     """
     Membuat file PDF baru yang hanya berisi halaman-halaman yang diminta.
-    pages_indices diasumsikan 1-based (halaman 1 adalah index 0).
-    Mengembalikan path ke file temporary baru.
     """
     try:
         reader = PdfReader(input_path)
@@ -52,7 +60,6 @@ def process_pdf_pages(input_path: str, pages_indices: List[int]) -> str:
         added_pages = 0
         
         for p in pages_indices:
-            # Convert 1-based index to 0-based
             p_idx = p - 1
             if 0 <= p_idx < total_pages:
                 writer.add_page(reader.pages[p_idx])
@@ -63,7 +70,6 @@ def process_pdf_pages(input_path: str, pages_indices: List[int]) -> str:
         if added_pages == 0:
             raise ValueError("Tidak ada halaman valid yang dipilih untuk diproses.")
 
-        # Simpan ke temp file baru
         with tempfile.NamedTemporaryFile(delete=False, suffix="_filtered.pdf") as tmp:
             writer.write(tmp)
             return tmp.name
@@ -78,13 +84,12 @@ async def health_check():
 
 @app.post("/document-parsing")
 async def document_parsing(
+    request: Request,
     file: UploadFile = File(...),
-    pages: Optional[str] = Form(None)  # Menerima JSON string array, e.g. "[1, 3, 5]"
+    pages: Optional[str] = Form(None)
 ):
     """
-    Endpoint untuk parsing dokumen PDF atau Image.
-    - file: File PDF atau Image (.jpg, .png, .bmp)
-    - pages: (Optional) JSON String array nomor halaman (1-based) khusus untuk PDF. Contoh: "[1, 2]"
+    Endpoint parsing dokumen dengan output JSON + URL Download File Markdown.
     """
     temp_file_path = None
     processed_file_path = None
@@ -92,7 +97,6 @@ async def document_parsing(
     ALLOWED_EXTENSIONS = {'.pdf', '.jpg', '.jpeg', '.png', '.bmp'}
     file_ext = Path(file.filename).suffix.lower()
     
-    # 1. Validasi ekstensi file
     if file_ext not in ALLOWED_EXTENSIONS:
         return JSONResponse(
             status_code=400,
@@ -103,69 +107,77 @@ async def document_parsing(
         )
 
     try:
-        # 2. Simpan file upload ke temporary file utama
+        # Simpan file upload
         with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
             shutil.copyfileobj(file.file, tmp)
             temp_file_path = tmp.name
 
-        # 3. Handle filtering halaman jika file adalah PDF dan parameter pages ada
         input_to_model = temp_file_path
         
+        # Handle PDF Page Selection
         if file_ext == '.pdf' and pages:
             try:
-                # Parse JSON string ke list integer
                 pages_list = json.loads(pages)
-                
-                if isinstance(pages_list, list) and all(isinstance(i, int) for i in pages_list):
-                    if len(pages_list) > 0:
-                        # Buat file PDF baru hanya dengan halaman yang dipilih
-                        processed_file_path = process_pdf_pages(temp_file_path, pages_list)
-                        input_to_model = processed_file_path
-                else:
-                    print("Format parameter 'pages' tidak valid, memproses seluruh dokumen.")
-            except json.JSONDecodeError:
-                print("Gagal parsing parameter 'pages', memproses seluruh dokumen.")
+                if isinstance(pages_list, list) and len(pages_list) > 0:
+                    processed_file_path = process_pdf_pages(temp_file_path, pages_list)
+                    input_to_model = processed_file_path
             except Exception as e:
-                # Jika gagal split, return error atau fallback (disini kita return error agar user tau)
-                return JSONResponse(
-                    status_code=400,
-                    content=create_response(success=False, message=str(e))
-                )
+                print(f"Gagal filter halaman: {e}")
 
-        # 4. Dapatkan instance pipeline
+        # Proses OCR
         ocr_pipeline = get_pipeline()
-
-        # 5. Proses prediksi
         output = ocr_pipeline.predict(input=input_to_model)
 
-        # 6. Ekstrak hasil Markdown
         markdown_list = []
         for res in output:
-            md_info = res.markdown
-            markdown_list.append(md_info)
+            markdown_list.append(res.markdown)
 
-        # Gabungkan halaman markdown
         full_markdown_text = ocr_pipeline.concatenate_markdown_pages(markdown_list)
+
+        # --- CLEANING: Unescape karakter khusus ---
+        # Mengubah literal '\n' menjadi baris baru sungguhan
+        # Mengubah '\"' menjadi kutip sungguhan
+        if isinstance(full_markdown_text, str):
+            full_markdown_text = full_markdown_text.replace("\\n", "\n").replace('\\"', '"')
+
+        # --- FITUR BARU: SIMPAN FILE MARKDOWN UNTUK DOWNLOAD ---
+        
+        # Buat nama file unik: originalname_timestamp_uuid.md
+        original_stem = Path(file.filename).stem
+        unique_id = f"{int(time.time())}_{str(uuid.uuid4())[:8]}"
+        output_filename = f"{original_stem}_{unique_id}.md"
+        output_filepath = os.path.join(OUTPUT_DIR, output_filename)
+
+        # Tulis ke file fisik
+        with open(output_filepath, "w", encoding="utf-8") as f:
+            f.write(full_markdown_text)
+
+        # Generate Full Download URL
+        # base_url mengambil scheme (http/https) dan host:port dari request
+        base_url = str(request.base_url).rstrip("/")
+        download_url = f"{base_url}/outputs/{output_filename}"
 
         return create_response(
             success=True, 
             data={
                 "markdown": full_markdown_text,
                 "filename": file.filename,
+                "output_filename": output_filename,
+                "download_url": download_url,
                 "pages_processed": len(markdown_list)
             },
             message="Document parsed successfully"
         )
 
     except Exception as e:
-        print(f"Error processing document: {str(e)}")
+        print(f"Error: {str(e)}")
         return JSONResponse(
             status_code=500,
             content=create_response(success=False, message=f"Internal Server Error: {str(e)}")
         )
         
     finally:
-        # 7. Bersihkan semua file temporary
+        # Bersihkan file temporary input (tapi file output di folder /outputs tetap disimpan agar bisa didownload)
         paths_to_clean = [p for p in [temp_file_path, processed_file_path] if p]
         for path in paths_to_clean:
             if path and os.path.exists(path):
