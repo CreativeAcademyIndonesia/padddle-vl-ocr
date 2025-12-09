@@ -9,6 +9,11 @@ COPY app.py /app/app.py
 
 # Install dependensi untuk API
 RUN pip install --no-cache-dir fastapi uvicorn[standard] python-multipart
+# Tambah system dependency untuk pdf2image
+RUN apt-get update && apt-get install -y poppler-utils && rm -rf /var/lib/apt/lists/*
+# Install FastAPI, Uvicorn, dan pdf2image
+RUN pip install --no-cache-dir fastapi uvicorn[standard] python-multipart pdf2image
+
 
 # Expose port untuk API
 EXPOSE 8000
