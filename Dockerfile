@@ -8,7 +8,7 @@ WORKDIR /app
 COPY app.py /app/app.py
 
 # Install dependensi untuk API
-RUN pip install --no-cache-dir fastapi uvicorn[standard]
+RUN pip install --no-cache-dir fastapi uvicorn[standard] python-multipart
 
 # Expose port untuk API
 EXPOSE 8000
