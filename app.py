@@ -4,7 +4,7 @@ from paddleocr import PaddleOCRVL
 from pdf2image import convert_from_path
 import tempfile
 import os
-import json
+import shutil
 from typing import List, Optional
 
 # Static API Key
@@ -16,32 +16,54 @@ app = FastAPI()
 pipeline = PaddleOCRVL()
 
 
-def ocr_output_to_dict_list(output):
-    """Konversi hasil OCR ke JSON-friendly format."""
+def process_ocr_output(output):
+    """
+    Konversi hasil OCR ke JSON-friendly format dan ekstrak Markdown builtin.
+    Returns: (list_of_dicts, markdown_string)
+    """
     results = []
-    json_dir = tempfile.mkdtemp()
+    markdowns = []
+    
+    # Gunakan direktori sementara yang aman
+    temp_dir = tempfile.mkdtemp()
 
-    for res in output:
-        if hasattr(res, "to_dict"):
-            results.append(res.to_dict())
-        elif hasattr(res, "to_json"):
-            results.append(json.loads(res.to_json()))
-        else:
-            res.save_to_json(save_path=json_dir)
-            for jf in os.listdir(json_dir):
-                if jf.endswith(".json"):
-                    with open(os.path.join(json_dir, jf), "r", encoding="utf-8") as f:
-                        results.append(json.load(f))
+    try:
+        for idx, res in enumerate(output):
+            # --- 1. Extract JSON Data ---
+            if hasattr(res, "to_dict"):
+                results.append(res.to_dict())
+            elif hasattr(res, "to_json"):
+                results.append(json.loads(res.to_json()))
+            else:
+                # Fallback: save to json file
+                res.save_to_json(save_path=temp_dir)
+                # Cari file json yang baru dibuat
+                for jf in os.listdir(temp_dir):
+                    if jf.endswith(".json"):
+                        fpath = os.path.join(temp_dir, jf)
+                        with open(fpath, "r", encoding="utf-8") as f:
+                            results.append(json.load(f))
+                        os.remove(fpath) # Hapus setelah baca
 
-    # cleanup temp json folder
-    for jf in os.listdir(json_dir):
-        try: os.remove(os.path.join(json_dir, jf))
-        except: pass
+            # --- 2. Extract Markdown Builtin ---
+            # Cek dokumentasi: https://docs.vllm.ai/projects/recipes/en/latest/PaddlePaddle/PaddleOCR-VL.html
+            if hasattr(res, "save_to_markdown"):
+                md_filename = f"out_{idx}.md"
+                md_path = os.path.join(temp_dir, md_filename)
+                try:
+                    res.save_to_markdown(save_path=md_path)
+                    if os.path.exists(md_path):
+                        with open(md_path, "r", encoding="utf-8") as f:
+                            markdowns.append(f.read())
+                        os.remove(md_path) # Hapus setelah baca
+                except Exception as e:
+                    print(f"Gagal extract markdown builtin: {e}")
 
-    try: os.rmdir(json_dir)
-    except: pass
+    finally:
+        # Cleanup temp folder
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
-    return results
+    return results, "\n\n".join(markdowns)
 
 
 def parse_pages_param(value: Optional[str]) -> Optional[List[int]]:
@@ -121,16 +143,32 @@ async def ocr_document(
                     img_path = img_tmp.name
                     tmp_paths.append(img_path)
 
-                result = ocr_output_to_dict_list(pipeline.predict(img_path))
-                pages_result.append({"page": page_num, "results": result})
+                result_json, result_md = process_ocr_output(pipeline.predict(img_path))
+                
+                # Format markdown with page header
+                page_md = f"## Page {page_num}\n\n{result_md}" if result_md else ""
+                
+                pages_result.append({
+                    "page": page_num, 
+                    "results": result_json,
+                    "markdown": page_md
+                })
 
         # === IMAGE ===
         else:
             if requested_pages and 1 not in requested_pages:
                 raise HTTPException(400, "File gambar hanya memiliki halaman 1")
 
-            result = ocr_output_to_dict_list(pipeline.predict(tmp_path))
-            pages_result.append({"page": 1, "results": result})
+            result_json, result_md = process_ocr_output(pipeline.predict(tmp_path))
+            
+            # Format markdown with page header
+            page_md = f"## Page 1\n\n{result_md}" if result_md else ""
+
+            pages_result.append({
+                "page": 1, 
+                "results": result_json,
+                "markdown": page_md
+            })
 
         return JSONResponse(content={"pages": pages_result})
 

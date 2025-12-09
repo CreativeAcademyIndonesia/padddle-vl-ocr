@@ -2,7 +2,12 @@
 - docker pull ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:latest-gpu-sm120-offline
 - docker save ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:latest-gpu-sm120-offline -o paddleocr-vl-latest-gpu-sm120-offline.tar
 - docker load -i paddleocr-vl-latest-gpu-sm120-offline.tar
-- docker run -it --gpus all --network host --user root ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:latest-gpu-sm120-offline /bin/bash
+# Mode Interaktif (untuk debugging/testing manual)
+- docker run -it --gpus all --network host --user root --name paddleocr-vl-interactive ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:latest-gpu-sm120-offline /bin/bash
+
+# Mode Service (berjalan di background, auto-start dengan Docker Desktop)
+- docker run -d --gpus all --network host --user root --name paddleocr-vl-interactive --restart unless-stopped ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:latest-gpu-sm120-offline sleep infinity
+- # Akses container: docker exec -it paddleocr-vl-interactive /bin/bash
 
 # Clone Project 
 - cd C:\Users\NAMA_KAMU\Documents  # atau folder kerja yang kamu mau
@@ -13,7 +18,7 @@
 - docker build -t paddleocr-vl-api .
 
 # Run Project 
-docker run -d --gpus all --network bridge -p 8000:8000 --name paddleocr-vl-api paddleocr-vl-api
+docker run -d --gpus all --network bridge -p 8000:8000 --name paddleocr-vl-api --restart unless-stopped paddleocr-vl-api
 
 # Jika ada perubahan 
 - docker build -t paddleocr-vl-api .
@@ -22,4 +27,4 @@ docker run -d --gpus all --network bridge -p 8000:8000 --name paddleocr-vl-api p
 - docker rm paddleocr-vl-api
 
 # Run Project 
-docker run -d --gpus all --network bridge -p 8000:8000 --name paddleocr-vl-api paddleocr-vl-api
+docker run -d --gpus all --network bridge -p 8000:8000 --name paddleocr-vl-api --restart unless-stopped paddleocr-vl-api
