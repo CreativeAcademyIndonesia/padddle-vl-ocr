@@ -10,7 +10,20 @@ from typing import List, Optional
 
 PADDLE_API_KEY = "332100185"
 app = FastAPI()
-pipeline = PaddleOCRVL()
+
+# --- LAZY LOADING SETUP ---
+# Jangan load model di sini agar reload cepat.
+# Model akan diload saat request pertama kali masuk.
+pipeline = None
+
+def get_pipeline():
+    """Fungsi singleton untuk memuat model hanya jika belum ada"""
+    global pipeline
+    if pipeline is None:
+        log_process("Loading PaddleOCR Model into memory... (This takes time)")
+        pipeline = PaddleOCRVL()
+        log_process("Model loaded successfully!")
+    return pipeline
 
 def process_ocr_output(output):
     """
@@ -205,7 +218,11 @@ async def ocr_document(
 
                     t_ocr = time.time()
                     log_process(f"  - Starting OCR prediction for Page {page_num}")
-                    result_json, result_md = process_ocr_output(pipeline.predict(img_path))
+                    
+                    # Gunakan get_pipeline()
+                    model = get_pipeline()
+                    result_json, result_md = process_ocr_output(model.predict(img_path))
+                    
                     log_process(f"  - OCR prediction & processing took {time.time() - t_ocr:.2f}s")
                     
                     # Format markdown with page header
@@ -227,7 +244,11 @@ async def ocr_document(
 
             t_ocr = time.time()
             log_process("Starting OCR prediction for Image")
-            result_json, result_md = process_ocr_output(pipeline.predict(tmp_path))
+            
+            # Gunakan get_pipeline()
+            model = get_pipeline()
+            result_json, result_md = process_ocr_output(model.predict(tmp_path))
+            
             log_process(f"OCR prediction & processing took {time.time() - t_ocr:.2f}s")
             
             # Format markdown with page header
