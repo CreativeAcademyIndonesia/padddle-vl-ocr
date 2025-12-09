@@ -1,10 +1,11 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.responses import JSONResponse
 from paddleocr import PaddleOCRVL
 from pdf2image import convert_from_path
 import tempfile
 import os
 import json
+from typing import List, Optional
 
 app = FastAPI()
 
@@ -53,13 +54,48 @@ def ocr_output_to_dict_list(output):
     return results
 
 
+def parse_pages_param(pages_str: Optional[str]) -> Optional[List[int]]:
+    """
+    pages_str:
+      - None / "" / "null" -> None (artinya semua halaman)
+      - "[1,2]"            -> [1, 2]
+    """
+    if pages_str is None:
+        return None
+
+    s = pages_str.strip()
+    if s == "" or s.lower() == "null":
+        return None
+
+    try:
+        data = json.loads(s)
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Parameter 'pages' harus berupa JSON array, misalnya [1,2] atau null.",
+        )
+
+    if not isinstance(data, list) or not all(isinstance(x, int) and x > 0 for x in data):
+        raise HTTPException(
+            status_code=400,
+            detail="Parameter 'pages' harus berupa list integer positif, misalnya [1,2,3].",
+        )
+
+    # Hilangkan duplikat dan urutkan
+    pages = sorted(set(data))
+    return pages
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
 
 @app.post("/ocr")
-async def ocr_document(file: UploadFile = File(...)):
+async def ocr_document(
+    file: UploadFile = File(...),
+    pages: Optional[str] = Form(None),  # dikirim sebagai teks, misalnya "[1,2]" atau "null"
+):
     content_type = file.content_type or ""
 
     # Hanya terima image/* atau application/pdf
@@ -68,6 +104,9 @@ async def ocr_document(file: UploadFile = File(...)):
             status_code=400,
             detail="File harus berupa gambar (image/*) atau PDF (application/pdf)",
         )
+
+    # Parse parameter pages
+    requested_pages = parse_pages_param(pages)
 
     tmp_paths = []
 
@@ -95,9 +134,30 @@ async def ocr_document(file: UploadFile = File(...)):
             pdf_pages = convert_from_path(tmp_path, dpi=200)
 
             if not pdf_pages:
-                raise HTTPException(status_code=400, detail="PDF kosong atau tidak bisa dikonversi")
+                raise HTTPException(
+                    status_code=400,
+                    detail="PDF kosong atau tidak bisa dikonversi",
+                )
 
-            for page_idx, page in enumerate(pdf_pages):
+            total_pages = len(pdf_pages)
+
+            # Kalau requested_pages None -> pakai semua halaman
+            if requested_pages is None:
+                target_pages = list(range(1, total_pages + 1))
+            else:
+                # Filter hanya halaman yang valid
+                target_pages = [p for p in requested_pages if 1 <= p <= total_pages]
+                if not target_pages:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Parameter 'pages' di luar range. PDF hanya memiliki {total_pages} halaman.",
+                    )
+
+            # page_number dimulai dari 1
+            for page_idx, page in enumerate(pdf_pages, start=1):
+                if page_idx not in target_pages:
+                    continue
+
                 # Simpan tiap halaman sebagai PNG sementara
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as img_tmp:
                     page.save(img_tmp.name, format="PNG")
@@ -110,13 +170,20 @@ async def ocr_document(file: UploadFile = File(...)):
 
                 pages_result.append(
                     {
-                        "page": page_idx + 1,
+                        "page": page_idx,
                         "results": page_results,
                     }
                 )
 
         # === CASE 2: GAMBAR BIASA ===
         else:
+            # Untuk image, hanya punya "halaman" ke-1 saja
+            if requested_pages is not None and 1 not in requested_pages:
+                raise HTTPException(
+                    status_code=400,
+                    detail="File gambar hanya memiliki page 1. Jika kirim 'pages', pastikan mengandung 1 atau biarkan null.",
+                )
+
             output = pipeline.predict(tmp_path)
             image_results = ocr_output_to_dict_list(output)
 
