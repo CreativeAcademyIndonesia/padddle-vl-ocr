@@ -1,23 +1,15 @@
 services:
   paddle-vl:
-    # Build dari folder saat ini
     build: .
-    # Memberi nama image hasil build (opsional, agar rapi di 'docker images')
     image: paddleocr-vl-api
     
-    # --name paddleocr-vl-api
     container_name: paddleocr-vl-api
     
-    # -p 8000:8000
     ports:
       - "8000:8000"
       
-    # --network bridge
-    # Menggunakan default bridge docker, bukan network terisolasi compose
     network_mode: bridge
 
-    # --gpus all
-    # Konfigurasi untuk mengaktifkan GPU NVIDIA di Docker Compose
     deploy:
       resources:
         reservations:
@@ -26,12 +18,9 @@ services:
               count: all
               capabilities: [gpu]
 
-    # Mapping volume untuk Hot Reload (tetap dipertahankan agar dev mudah)
     volumes:
       - .:/app
       
-    # Command dengan auto-reload
     command: uvicorn app:app --host 0.0.0.0 --port 8000 --reload
     
-    # --restart unless-stopped
     restart: unless-stopped

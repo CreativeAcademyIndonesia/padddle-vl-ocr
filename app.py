@@ -1,21 +1,16 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Header
 from fastapi.responses import JSONResponse
 from paddleocr import PaddleOCRVL
-from pdf2image import convert_from_path
+from pdf2image import convert_from_path, pdfinfo_from_path 
 import tempfile
 import os
 import shutil
 import json
 from typing import List, Optional
 
-# Static API Key
 PADDLE_API_KEY = "332100185"
-
 app = FastAPI()
-
-# Load model sekali di awal
 pipeline = PaddleOCRVL()
-
 
 def process_ocr_output(output):
     """
@@ -27,6 +22,8 @@ def process_ocr_output(output):
     
     # Gunakan direktori sementara yang aman
     temp_dir = tempfile.mkdtemp()
+    
+    log_process("process ocr output")
 
     try:
         for idx, res in enumerate(output):
@@ -66,9 +63,9 @@ def process_ocr_output(output):
 
     return results, "\n\n".join(markdowns)
 
-
 def parse_pages_param(value: Optional[str]) -> Optional[List[int]]:
     """Parse parameter pages. Support JSON [1,2] atau CSV 1,2"""
+    log_process("process parse pages params")
     if value is None:
         return None
     
@@ -130,17 +127,22 @@ async def ocr_document(
     paddle_api_key: Optional[str] = Header(None, alias="Paddle-API-Key")
 ):
     """OCR endpoint with PDF support and security via Paddle-API-Key."""
+    start_time = time.time()
+    log_process("--- START OCR REQUEST ---")
 
     # Validate API Key
     if paddle_api_key != PADDLE_API_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        return create_response(success=False, message="Unauthorized", error_code=401)
 
     content_type = file.content_type or ""
 
     if not (content_type.startswith("image/") or content_type == "application/pdf"):
-        raise HTTPException(400, "File harus berupa image/* atau PDF")
+        return create_response(success=False, message="File harus berupa image/* atau PDF", error_code=400)
 
-    requested_pages = parse_pages_param(pages)
+    try:
+        requested_pages = parse_pages_param(pages)
+    except HTTPException as e:
+        return create_response(success=False, message=e.detail, error_code=e.status_code)
 
     tmp_paths = []
     try:
@@ -152,50 +154,81 @@ async def ocr_document(
             tmp.write(await file.read())
             tmp_path = tmp.name
             tmp_paths.append(tmp_path)
+        
+        log_process(f"File saved to temp: {tmp_path} ({os.path.getsize(tmp_path)} bytes)")
 
         pages_result = []
 
         # === PDF ===
         if content_type == "application/pdf" or suffix.lower() == ".pdf":
-            pdf_pages = convert_from_path(tmp_path, dpi=200)
-            if not pdf_pages:
-                raise HTTPException(400, "PDF tidak valid atau kosong")
+            try:
+                # 1. Cek Info PDF (Total Halaman) tanpa convert gambar (Sangat Cepat)
+                t_info = time.time()
+                info = pdfinfo_from_path(tmp_path)
+                total_pages = int(info["Pages"])
+                log_process(f"PDF Info retrieved in {time.time() - t_info:.2f}s. Total Pages: {total_pages}")
+            except Exception as e:
+                 return create_response(success=False, message=f"Gagal membaca info PDF: {str(e)}", error_code=400)
 
-            total_pages = len(pdf_pages)
+            if total_pages == 0:
+                return create_response(success=False, message="PDF kosong", error_code=400)
+
+            # 2. Tentukan halaman mana saja yang mau di-process
             if requested_pages is None:
                 target_pages = list(range(1, total_pages + 1))
             else:
+                # Validasi halaman request
                 target_pages = [p for p in requested_pages if 1 <= p <= total_pages]
-
                 if not target_pages:
-                    raise HTTPException(400, f"Halaman tidak valid. Total halaman PDF: {total_pages}")
+                    return create_response(success=False, message=f"Halaman tidak valid. Total halaman PDF: {total_pages}", error_code=400)
 
-            for page_num, image in enumerate(pdf_pages, start=1):
-                if page_num not in target_pages:
+            # 3. Loop hanya pada halaman yang diminta (Hemat RAM & CPU)
+            for page_num in target_pages:
+                try:
+                    log_process(f"Processing Page {page_num}...")
+                    
+                    # Convert HANYA 1 halaman spesifik
+                    t_conv = time.time()
+                    # first_page=page_num, last_page=page_num
+                    images = convert_from_path(tmp_path, dpi=200, first_page=page_num, last_page=page_num)
+                    log_process(f"  - PDF to Image conversion took {time.time() - t_conv:.2f}s")
+                    
+                    if not images:
+                        continue
+                        
+                    image = images[0] # Ambil gambar hasil convert
+
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as img_tmp:
+                        image.save(img_tmp.name, format="PNG")
+                        img_path = img_tmp.name
+                        tmp_paths.append(img_path)
+
+                    t_ocr = time.time()
+                    log_process(f"  - Starting OCR prediction for Page {page_num}")
+                    result_json, result_md = process_ocr_output(pipeline.predict(img_path))
+                    log_process(f"  - OCR prediction & processing took {time.time() - t_ocr:.2f}s")
+                    
+                    # Format markdown with page header
+                    page_md = f"## Page {page_num}\n\n{result_md}" if result_md else ""
+                    
+                    pages_result.append({
+                        "page": page_num, 
+                        "results": result_json,
+                        "markdown": page_md
+                    })
+                except Exception as e:
+                    log_process(f"ERROR processing page {page_num}: {e}")
                     continue
-
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as img_tmp:
-                    image.save(img_tmp.name, format="PNG")
-                    img_path = img_tmp.name
-                    tmp_paths.append(img_path)
-
-                result_json, result_md = process_ocr_output(pipeline.predict(img_path))
-                
-                # Format markdown with page header
-                page_md = f"## Page {page_num}\n\n{result_md}" if result_md else ""
-                
-                pages_result.append({
-                    "page": page_num, 
-                    "results": result_json,
-                    "markdown": page_md
-                })
 
         # === IMAGE ===
         else:
             if requested_pages and 1 not in requested_pages:
-                raise HTTPException(400, "File gambar hanya memiliki halaman 1")
+                return create_response(success=False, message="File gambar hanya memiliki halaman 1", error_code=400)
 
+            t_ocr = time.time()
+            log_process("Starting OCR prediction for Image")
             result_json, result_md = process_ocr_output(pipeline.predict(tmp_path))
+            log_process(f"OCR prediction & processing took {time.time() - t_ocr:.2f}s")
             
             # Format markdown with page header
             page_md = f"## Page 1\n\n{result_md}" if result_md else ""
@@ -206,12 +239,13 @@ async def ocr_document(
                 "markdown": page_md
             })
 
-        return JSONResponse(content={"pages": pages_result})
+        total_duration = time.time() - start_time
+        log_process(f"--- FINISHED OCR REQUEST in {total_duration:.2f}s ---")
+        return create_response(success=True, data={"pages": pages_result})
 
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(500, f"OCR gagal: {e}")
+        log_process(f"CRITICAL ERROR: {str(e)}")
+        return create_response(success=False, message=f"OCR gagal: {str(e)}", error_code=500)
     finally:
         for p in tmp_paths:
             try: os.remove(p)
