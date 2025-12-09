@@ -11,10 +11,14 @@ RUN mkdir -p /var/lib/apt/lists/partial && \
 
 WORKDIR /app
 
-COPY app.py /app/app.py
+# Copy requirements dulu agar layer pip install ter-cache jika tidak ada perubahan package
+COPY requirements.txt .
 
 # Install dependency Python untuk API + pdf2image
-RUN pip install --no-cache-dir fastapi uvicorn[standard] python-multipart pdf2image
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy sisa source code
+COPY . .
 
 EXPOSE 8000
 

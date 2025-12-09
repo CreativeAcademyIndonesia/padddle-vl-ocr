@@ -5,6 +5,7 @@ from pdf2image import convert_from_path
 import tempfile
 import os
 import shutil
+import json
 from typing import List, Optional
 
 # Static API Key
@@ -67,19 +68,54 @@ def process_ocr_output(output):
 
 
 def parse_pages_param(value: Optional[str]) -> Optional[List[int]]:
-    """Parse parameter pages. null → semua halaman."""
-    if value is None or value.strip() == "" or value.lower() == "null":
+    """Parse parameter pages. Support JSON [1,2] atau CSV 1,2"""
+    if value is None:
+        return None
+    
+    value = value.strip()
+    if value == "" or value.lower() == "null":
         return None
 
+    # Bersihkan kutip ganda/tunggal di awal & akhir jika terbawa (issue umum di curl Windows)
+    if len(value) >= 2 and ((value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'")):
+        value = value[1:-1]
+
+    decoded = None
+
+    # 1. Coba Parse sebagai JSON
     try:
         decoded = json.loads(value)
-    except:
-        raise HTTPException(400, detail="Format 'pages' harus JSON array, contoh: [1,2] atau null")
+    except (json.JSONDecodeError, TypeError):
+        # 2. Jika gagal JSON, coba parse sebagai Comma Separated Values (contoh: "1, 3")
+        try:
+            # Split koma, filter empty, convert int
+            decoded = [int(x.strip()) for x in value.split(',') if x.strip().isdigit()]
+            if not decoded and value: # Jika value ada tapi hasil kosong (misal "abc")
+                 raise ValueError 
+        except ValueError:
+             raise HTTPException(400, detail="Format 'pages' salah. Gunakan JSON array [1,2] atau angka dipisah koma '1,2'")
+    
+    # Handle jika input hanya satu angka integer (misal dari json "1")
+    if isinstance(decoded, int):
+        decoded = [decoded]
 
-    if not isinstance(decoded, list) or not all(isinstance(x, int) and x > 0 for x in decoded):
-        raise HTTPException(400, detail="'pages' harus berupa array angka contoh: [1,2]")
+    if not isinstance(decoded, list):
+        raise HTTPException(400, detail="Format 'pages' harus berupa list angka")
 
-    return sorted(set(decoded))
+    # Pastikan semua elemen int dan positif
+    try:
+        final_pages = []
+        for x in decoded:
+            val = int(x)
+            if val > 0:
+                final_pages.append(val)
+        
+        if not final_pages and decoded: # List tidak kosong tapi isinya invalid semua
+             raise HTTPException(400, detail="Halaman harus angka positif")
+             
+        return sorted(list(set(final_pages)))
+    except (ValueError, TypeError):
+        raise HTTPException(400, detail="Elemen halaman harus berupa angka")
 
 
 @app.get("/health")

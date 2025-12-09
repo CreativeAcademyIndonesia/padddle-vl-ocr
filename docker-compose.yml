@@ -1,0 +1,16 @@
+services:
+  paddle-vl:
+    build: .
+    container_name: paddle-vl-container
+    volumes:
+      # MAPPING VOLUME:
+      # Ini yang membuat perubahan di lokal langsung terbaca di container
+      - .:/app
+    ports:
+      - "8000:8000"
+    # COMMAND:
+    # Menambahkan --reload agar uvicorn restart otomatis saat ada perubahan kode
+    command: uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+    # Restart policy opsional
+    restart: unless-stopped
+
