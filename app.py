@@ -116,20 +116,23 @@ async def document_parsing(
             
             try:
                 # Convert SELURUH halaman PDF ke images
-                images = convert_from_path(input_to_model, dpi=300)
+                # Gunakan dpi=300 untuk high resolution
+                # fmt="png" akan memaksa poppler menggunakan format lossless internal
+                images = convert_from_path(input_to_model, dpi=300, fmt="png", thread_count=4)
                 print_with_time(f"Berhasil convert total {len(images)} halaman ke gambar.")
                 
                 original_stem = Path(file.filename).stem
                 
                 for i, img in enumerate(images):
-                    # Format nama file image: filename_page_{i+1}.jpg
+                    # Format nama file image: filename_page_{i+1}.png (Gunakan PNG)
                     # Page number di filename mulai dari 1
                     page_num = i + 1
-                    image_filename = f"{original_stem}_page_{page_num}.jpg"
+                    image_filename = f"{original_stem}_page_{page_num}.png"
                     image_path = os.path.join(img_dir, image_filename)
                     
-                    # Simpan dengan metadata DPI 300
-                    img.save(image_path, "JPEG", quality=95, dpi=(300, 300))
+                    # Simpan dengan metadata DPI 300, Format PNG (Lossless)
+                    # PNG lebih baik untuk OCR daripada JPEG karena tidak ada artefak kompresi
+                    img.save(image_path, "PNG", dpi=(300, 300))
                     
                     # Simpan path dengan info halaman untuk filtering nanti
                     all_image_paths.append({
