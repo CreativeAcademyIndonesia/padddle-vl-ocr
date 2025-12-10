@@ -22,7 +22,7 @@ def print_with_time(message: str):
     timestamp = datetime.now().strftime("%H:%M")
     print(f"{timestamp} {message}")
 
-OUTPUT_DIR = "outputs"
+OUTPUT_DIR = os.path.join("storage", "agen", "production-note", "outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
 pipeline = None
@@ -241,6 +241,20 @@ async def document_parsing(
              rel = os.path.relpath(img_info["path"], OUTPUT_DIR).replace("\\", "/")
              stored_images_info.append(f"{base_url}/outputs/{rel}")
 
+        # URL untuk file markdown per halaman (stored_readme)
+        stored_markdown = []
+        markdown_pages_base = os.path.join(base_path, "markdown_pages")
+        
+        for inp_path in ocr_inputs:
+             # Asumsi PaddleOCR-VL menyimpan markdown dengan nama file yang sama dengan input image
+             stem = Path(inp_path).stem
+             md_filename = f"{stem}.md"
+             md_path = os.path.join(markdown_pages_base, md_filename)
+             
+             if os.path.exists(md_path):
+                 rel = os.path.relpath(md_path, OUTPUT_DIR).replace("\\", "/")
+                 stored_markdown.append(f"{base_url}/outputs/{rel}")
+
         return create_response(
             success=True, 
             data={
@@ -249,6 +263,7 @@ async def document_parsing(
                 "output_filename": output_filename,
                 "download_url": download_url,
                 "stored_images": stored_images_info,
+                "stored_markdown": stored_markdown,
                 "pages_processed": len(markdown_list)
             },
             message="Document parsed successfully"
