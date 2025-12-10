@@ -238,6 +238,13 @@ async def document_parsing(
         # URL untuk file image yang disimpan (SEMUA converted images, bukan cuma yg di-OCR)
         stored_images_info = []
         for img_info in all_image_paths:
+             # OUTPUT_DIR = "storage/agen/production-note/outputs"
+             # img_info["path"] = "storage/agen/production-note/outputs/2025/2025.12.10/image/file.jpg"
+             # os.path.relpath akan menghasilkan path relatif dari OUTPUT_DIR ke file
+             # misal: "2025/2025.12.10/image/file.jpg"
+             # Jadi ini sudah benar, karena StaticFiles dimount ke /outputs
+             # yang artinya http://host/outputs/X akan mencari file di OUTPUT_DIR/X
+             
              rel = os.path.relpath(img_info["path"], OUTPUT_DIR).replace("\\", "/")
              stored_images_info.append(f"{base_url}/outputs/{rel}")
 
@@ -246,7 +253,6 @@ async def document_parsing(
         markdown_pages_base = os.path.join(base_path, "markdown_pages")
         
         for inp_path in ocr_inputs:
-             # Asumsi PaddleOCR-VL menyimpan markdown dengan nama file yang sama dengan input image
              stem = Path(inp_path).stem
              md_filename = f"{stem}.md"
              md_path = os.path.join(markdown_pages_base, md_filename)
