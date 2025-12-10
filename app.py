@@ -136,7 +136,7 @@ async def document_parsing(
                         image_path, 
                         "JPEG", 
                         dpi=(300, 300), 
-                        quality=95, 
+                        quality=75, 
                         optimize=True, 
                         subsampling=2
                     )
@@ -215,9 +215,9 @@ async def document_parsing(
 
         full_markdown_text = ocr_pipeline.concatenate_markdown_pages(markdown_list)
 
-        # --- CLEANING ---
-        if isinstance(full_markdown_text, str):
-            full_markdown_text = full_markdown_text.replace("\\n", "\n").replace('\\"', '"')
+        # # --- CLEANING ---
+        # if isinstance(full_markdown_text, str):
+        #     full_markdown_text = full_markdown_text.replace("\\n", "\n").replace('\\"', '"')
 
         # --- SIMPAN MARKDOWN ---
         original_stem = Path(file.filename).stem
