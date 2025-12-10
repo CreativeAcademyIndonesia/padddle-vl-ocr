@@ -107,7 +107,6 @@ async def document_parsing(
     print_with_time("Document parsing...")
     temp_file_path = None
     processed_file_path = None
-    temp_image_files = []
     
     ALLOWED_EXTENSIONS = {'.pdf', '.jpg', '.jpeg', '.png', '.bmp'}
     file_ext = Path(file.filename).suffix.lower()
@@ -122,48 +121,73 @@ async def document_parsing(
         )
 
     try:
-        # Simpan file upload
-        print_with_time("Menyimpan File...")
-        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
-            shutil.copyfileobj(file.file, tmp)
-            temp_file_path = tmp.name
-
-        input_to_model = temp_file_path
+        # --- STRUKTUR FOLDER: outputs/YYYY/YYYY.MM.DD/{pdf|image}/filename ---
+        now = datetime.now()
+        year_str = now.strftime("%Y")
+        date_str = now.strftime("%Y.%m.%d")
         
-        # Handle PDF Page Selection
-        if file_ext == '.pdf' and pages:
-            try:
-                pages_list = json.loads(pages)
-                if isinstance(pages_list, list) and len(pages_list) > 0:
-                    processed_file_path = process_pdf_pages(temp_file_path, pages_list)
-                    input_to_model = processed_file_path
-            except Exception as e:
-                print_with_time(f"Gagal filter halaman: {e}")
+        base_path = os.path.join(OUTPUT_DIR, year_str, date_str)
+        pdf_dir = os.path.join(base_path, "pdf")
+        img_dir = os.path.join(base_path, "image")
+        
+        os.makedirs(pdf_dir, exist_ok=True)
+        os.makedirs(img_dir, exist_ok=True)
+        
+        print_with_time(f"Output directories: {pdf_dir}, {img_dir}")
 
-        # --- KONVERSI KE IMAGE JIKA PDF ---
-        ocr_inputs = []
+        # Simpan file upload ke lokasi persistent
+        print_with_time("Menyimpan File Upload...")
+        
         if file_ext == '.pdf':
+            # Simpan di folder PDF
+            saved_file_path = os.path.join(pdf_dir, file.filename)
+            # Jika file ada, mungkin perlu handle conflict? Untuk sekarang overwrite.
+            with open(saved_file_path, "wb") as f:
+                shutil.copyfileobj(file.file, f)
+            
+            # Input model awal adalah file yang disimpan
+            input_to_model = saved_file_path
+            
+            # --- HANDLE PDF PAGE SELECTION (Restore) ---
+            if pages:
+                try:
+                    pages_list = json.loads(pages)
+                    if isinstance(pages_list, list) and len(pages_list) > 0:
+                        # process_pdf_pages return temp file path
+                        processed_file_path = process_pdf_pages(input_to_model, pages_list)
+                        input_to_model = processed_file_path # Gunakan subset untuk konversi
+                except Exception as e:
+                    print_with_time(f"Gagal filter halaman: {e}")
+            
+            # --- KONVERSI PDF KE IMAGE ---
             print_with_time("Konversi PDF ke Image High Res (300 DPI)...")
+            ocr_inputs = []
+            
             try:
-                # Convert PDF (entah original atau subset) ke images
-                # Gunakan dpi=300 untuk high resolution
+                # Convert PDF (original atau subset) ke images
                 images = convert_from_path(input_to_model, dpi=300)
-                
                 print_with_time(f"Berhasil convert {len(images)} halaman ke gambar.")
                 
+                original_stem = Path(file.filename).stem
+                
                 for i, img in enumerate(images):
-                    # Simpan sebagai file temporary jpeg
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=f"_page_{i}.jpg") as tmp_img:
-                        img.save(tmp_img.name, "JPEG", quality=95)
-                        ocr_inputs.append(tmp_img.name)
-                        temp_image_files.append(tmp_img.name)
+                    # Format nama file image: filename_page_{i}.jpg
+                    image_filename = f"{original_stem}_page_{i+1}.jpg"
+                    image_path = os.path.join(img_dir, image_filename)
+                    
+                    img.save(image_path, "JPEG", quality=95)
+                    ocr_inputs.append(image_path)
+                    
             except Exception as e:
-                # Jika gagal convert (misal poppler tidak ada), log dan fallback atau raise?
-                # User minta convert, jadi kita raise error jika gagal
                 raise Exception(f"Gagal convert PDF ke Image: {str(e)}. Pastikan poppler-utils terinstall.")
+                
         else:
-            # Jika bukan PDF (sudah image), langsung pakai
-            ocr_inputs.append(input_to_model)
+            # Jika upload image, simpan di folder image
+            saved_file_path = os.path.join(img_dir, file.filename)
+            with open(saved_file_path, "wb") as f:
+                shutil.copyfileobj(file.file, f)
+            
+            ocr_inputs = [saved_file_path]
 
         # Proses OCR
         print_with_time(f"OCR Document ({len(ocr_inputs)} files)...")
@@ -182,30 +206,43 @@ async def document_parsing(
 
         full_markdown_text = ocr_pipeline.concatenate_markdown_pages(markdown_list)
 
-        # --- CLEANING: Unescape karakter khusus ---
-        # Mengubah literal '\n' menjadi baris baru sungguhan
-        # Mengubah '\"' menjadi kutip sungguhan
+        # --- CLEANING ---
         if isinstance(full_markdown_text, str):
             full_markdown_text = full_markdown_text.replace("\\n", "\n").replace('\\"', '"')
 
-        # --- FITUR BARU: SIMPAN FILE MARKDOWN UNTUK DOWNLOAD ---
+        # --- SIMPAN MARKDOWN ---
+        # Markdown disimpan dimana? User tidak spesifik, tapi mungkin di base output atau folder pdf/image?
+        # Biasanya output markdown menyertai dokumen aslinya. Saya taruh di folder yang sama dengan inputnya?
+        # Atau kembali ke OUTPUT_DIR/filename.md?
+        # User request struktur: 2025>2025.12.10>pdf>filename.pdf
+        # Saya taruh markdown di folder 'result' atau root tanggal?
+        # Biar aman, taruh di root tanggal saja: outputs/YYYY/YYYY.MM.DD/filename.md
         
-        # Buat nama file unik: originalname_timestamp_uuid.md
         original_stem = Path(file.filename).stem
-        unique_id = f"{int(time.time())}_{str(uuid.uuid4())[:8]}"
+        unique_id = f"{int(time.time())}"
         output_filename = f"{original_stem}_{unique_id}.md"
-        output_filepath = os.path.join(OUTPUT_DIR, output_filename)
+        output_filepath = os.path.join(base_path, output_filename)
 
-        # Tulis ke file fisik
         print_with_time("Menyimpan File Markdown...")
         with open(output_filepath, "w", encoding="utf-8") as f:
             f.write(full_markdown_text)
 
         # Generate Full Download URL
         print_with_time("Generate Full Download URL...")
-        # base_url mengambil scheme (http/https) dan host:port dari request
         base_url = str(request.base_url).rstrip("/")
-        download_url = f"{base_url}/outputs/{output_filename}"
+        # URL needs to be relative to app mount
+        # app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
+        # File path: outputs/YYYY/YYYY.MM.DD/filename.md
+        # URL path: /outputs/YYYY/YYYY.MM.DD/filename.md
+        
+        rel_path = os.path.relpath(output_filepath, OUTPUT_DIR).replace("\\", "/")
+        download_url = f"{base_url}/outputs/{rel_path}"
+
+        # URL untuk file yang disimpan (optional info)
+        stored_files_info = []
+        for inp in ocr_inputs:
+             rel = os.path.relpath(inp, OUTPUT_DIR).replace("\\", "/")
+             stored_files_info.append(f"{base_url}/outputs/{rel}")
 
         return create_response(
             success=True, 
@@ -214,6 +251,7 @@ async def document_parsing(
                 "filename": file.filename,
                 "output_filename": output_filename,
                 "download_url": download_url,
+                "stored_images": stored_files_info,
                 "pages_processed": len(markdown_list)
             },
             message="Document parsed successfully"
@@ -221,15 +259,17 @@ async def document_parsing(
 
     except Exception as e:
         print_with_time(f"Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return JSONResponse(
             status_code=500,
             content=create_response(success=False, message=f"Internal Server Error: {str(e)}")
         )
         
     finally:
+        # Bersihkan hanya file temporary sistem (filtered pdf), tapi JANGAN hapus image hasil convert atau file upload
         print_with_time("Bersihkan file temporary...")
-        paths_to_clean = [p for p in [temp_file_path, processed_file_path] if p]
-        paths_to_clean.extend(temp_image_files)
+        paths_to_clean = [processed_file_path] # Hanya processed_file_path (subset PDF) yang temporary
         
         for path in paths_to_clean:
             if path and os.path.exists(path):
