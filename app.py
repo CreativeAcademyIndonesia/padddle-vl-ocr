@@ -57,9 +57,11 @@ def create_response(success: bool, data: Any = None, message: str = "") -> Dict[
         "message": message
     }
 
-def process_pdf_pages(input_path: str, pages_indices: List[int]) -> str:
+def process_pdf_pages(input_path: str, pages_indices: List[int], output_path: Optional[str] = None) -> str:
     """
     Membuat file PDF baru yang hanya berisi halaman-halaman yang diminta.
+    Output disimpan ke output_path jika disediakan, jika tidak menggunakan temporary file.
+    Menjaga resolusi/kualitas asli halaman.
     """
     print_with_time("Memproses halaman PDF...")
     try:
@@ -72,6 +74,8 @@ def process_pdf_pages(input_path: str, pages_indices: List[int]) -> str:
         for p in pages_indices:
             p_idx = p - 1
             if 0 <= p_idx < total_pages:
+                # add_page di pypdf menyalin halaman reference tanpa re-encoding konten
+                # jadi resolusi/kualitas asli terjaga
                 writer.add_page(reader.pages[p_idx])
                 added_pages += 1
             else:
@@ -80,9 +84,15 @@ def process_pdf_pages(input_path: str, pages_indices: List[int]) -> str:
         if added_pages == 0:
             raise ValueError("Tidak ada halaman valid yang dipilih untuk diproses.")
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix="_filtered.pdf") as tmp:
-            writer.write(tmp)
-            result = tmp.name
+        if output_path:
+            with open(output_path, "wb") as f:
+                writer.write(f)
+            result = output_path
+        else:
+            with tempfile.NamedTemporaryFile(delete=False, suffix="_filtered.pdf") as tmp:
+                writer.write(tmp)
+                result = tmp.name
+                
         print_with_time("Halaman PDF berhasil diproses.")
         return result
             
@@ -138,33 +148,47 @@ async def document_parsing(
         # Simpan file upload ke lokasi persistent
         print_with_time("Menyimpan File Upload...")
         
+        ocr_inputs = []
+        download_url_pdf_filtered = None
+
         if file_ext == '.pdf':
             # Simpan di folder PDF
             saved_file_path = os.path.join(pdf_dir, file.filename)
-            # Jika file ada, mungkin perlu handle conflict? Untuk sekarang overwrite.
             with open(saved_file_path, "wb") as f:
                 shutil.copyfileobj(file.file, f)
             
             # Input model awal adalah file yang disimpan
             input_to_model = saved_file_path
             
-            # --- HANDLE PDF PAGE SELECTION (Restore) ---
+            # --- HANDLE PDF PAGE SELECTION ---
             if pages:
                 try:
                     pages_list = json.loads(pages)
                     if isinstance(pages_list, list) and len(pages_list) > 0:
-                        # process_pdf_pages return temp file path
-                        processed_file_path = process_pdf_pages(input_to_model, pages_list)
+                        # Buat nama file filtered
+                        original_stem = Path(file.filename).stem
+                        filtered_filename = f"{original_stem}_filtered.pdf"
+                        processed_file_path = os.path.join(pdf_dir, filtered_filename)
+                        
+                        # Process dan simpan ke file persistent, bukan temp
+                        process_pdf_pages(input_to_model, pages_list, output_path=processed_file_path)
+                        
                         input_to_model = processed_file_path # Gunakan subset untuk konversi
+                        
+                        # Generate URL download untuk filtered PDF
+                        rel_path_pdf = os.path.relpath(processed_file_path, OUTPUT_DIR).replace("\\", "/")
+                        base_url_req = str(request.base_url).rstrip("/")
+                        download_url_pdf_filtered = f"{base_url_req}/outputs/{rel_path_pdf}"
+                        
                 except Exception as e:
                     print_with_time(f"Gagal filter halaman: {e}")
             
             # --- KONVERSI PDF KE IMAGE ---
             print_with_time("Konversi PDF ke Image High Res (300 DPI)...")
-            ocr_inputs = []
             
             try:
                 # Convert PDF (original atau subset) ke images
+                # Gunakan dpi=300 untuk high resolution
                 images = convert_from_path(input_to_model, dpi=300)
                 print_with_time(f"Berhasil convert {len(images)} halaman ke gambar.")
                 
@@ -175,7 +199,8 @@ async def document_parsing(
                     image_filename = f"{original_stem}_page_{i+1}.jpg"
                     image_path = os.path.join(img_dir, image_filename)
                     
-                    img.save(image_path, "JPEG", quality=95)
+                    # Simpan dengan metadata DPI 300
+                    img.save(image_path, "JPEG", quality=95, dpi=(300, 300))
                     ocr_inputs.append(image_path)
                     
             except Exception as e:
@@ -197,6 +222,7 @@ async def document_parsing(
         for inp_path in ocr_inputs:
             # Predict per file
             output = ocr_pipeline.predict(input=inp_path)
+            output.save_to_markdown(save_path="output")
             all_outputs.extend(output)
 
         print_with_time("Extract Markdown...")
@@ -211,13 +237,6 @@ async def document_parsing(
             full_markdown_text = full_markdown_text.replace("\\n", "\n").replace('\\"', '"')
 
         # --- SIMPAN MARKDOWN ---
-        # Markdown disimpan dimana? User tidak spesifik, tapi mungkin di base output atau folder pdf/image?
-        # Biasanya output markdown menyertai dokumen aslinya. Saya taruh di folder yang sama dengan inputnya?
-        # Atau kembali ke OUTPUT_DIR/filename.md?
-        # User request struktur: 2025>2025.12.10>pdf>filename.pdf
-        # Saya taruh markdown di folder 'result' atau root tanggal?
-        # Biar aman, taruh di root tanggal saja: outputs/YYYY/YYYY.MM.DD/filename.md
-        
         original_stem = Path(file.filename).stem
         unique_id = f"{int(time.time())}"
         output_filename = f"{original_stem}_{unique_id}.md"
@@ -227,22 +246,17 @@ async def document_parsing(
         with open(output_filepath, "w", encoding="utf-8") as f:
             f.write(full_markdown_text)
 
-        # Generate Full Download URL
+        # Generate Full Download URL Markdown
         print_with_time("Generate Full Download URL...")
         base_url = str(request.base_url).rstrip("/")
-        # URL needs to be relative to app mount
-        # app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
-        # File path: outputs/YYYY/YYYY.MM.DD/filename.md
-        # URL path: /outputs/YYYY/YYYY.MM.DD/filename.md
-        
         rel_path = os.path.relpath(output_filepath, OUTPUT_DIR).replace("\\", "/")
         download_url = f"{base_url}/outputs/{rel_path}"
 
-        # URL untuk file yang disimpan (optional info)
-        stored_files_info = []
+        # URL untuk file yang disimpan (images)
+        stored_images_info = []
         for inp in ocr_inputs:
              rel = os.path.relpath(inp, OUTPUT_DIR).replace("\\", "/")
-             stored_files_info.append(f"{base_url}/outputs/{rel}")
+             stored_images_info.append(f"{base_url}/outputs/{rel}")
 
         return create_response(
             success=True, 
@@ -251,7 +265,8 @@ async def document_parsing(
                 "filename": file.filename,
                 "output_filename": output_filename,
                 "download_url": download_url,
-                "stored_images": stored_files_info,
+                "filtered_pdf_url": download_url_pdf_filtered,
+                "stored_images": stored_images_info,
                 "pages_processed": len(markdown_list)
             },
             message="Document parsed successfully"
@@ -267,16 +282,9 @@ async def document_parsing(
         )
         
     finally:
-        # Bersihkan hanya file temporary sistem (filtered pdf), tapi JANGAN hapus image hasil convert atau file upload
-        print_with_time("Bersihkan file temporary...")
-        paths_to_clean = [processed_file_path] # Hanya processed_file_path (subset PDF) yang temporary
-        
-        for path in paths_to_clean:
-            if path and os.path.exists(path):
-                try:
-                    os.remove(path)
-                except Exception:
-                    pass
+        # File temporary sudah tidak digunakan karena filtered PDF sekarang disimpan persistent
+        # Namun jika ada file temp lain di masa depan bisa dibersihkan di sini
+        pass
 
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
