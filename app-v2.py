@@ -13,7 +13,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Dict, List
 from pypdf import PdfReader, PdfWriter
-from pdf2image import convert_from_path
 
 app = FastAPI(title="PaddleOCR-VL API")
 
@@ -107,7 +106,6 @@ async def document_parsing(
     print_with_time("Document parsing...")
     temp_file_path = None
     processed_file_path = None
-    temp_image_files = []
     
     ALLOWED_EXTENSIONS = {'.pdf', '.jpg', '.jpeg', '.png', '.bmp'}
     file_ext = Path(file.filename).suffix.lower()
@@ -140,44 +138,14 @@ async def document_parsing(
             except Exception as e:
                 print_with_time(f"Gagal filter halaman: {e}")
 
-        # --- KONVERSI KE IMAGE JIKA PDF ---
-        ocr_inputs = []
-        if file_ext == '.pdf':
-            print_with_time("Konversi PDF ke Image High Res (300 DPI)...")
-            try:
-                # Convert PDF (entah original atau subset) ke images
-                # Gunakan dpi=300 untuk high resolution
-                images = convert_from_path(input_to_model, dpi=300)
-                
-                print_with_time(f"Berhasil convert {len(images)} halaman ke gambar.")
-                
-                for i, img in enumerate(images):
-                    # Simpan sebagai file temporary jpeg
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=f"_page_{i}.jpg") as tmp_img:
-                        img.save(tmp_img.name, "JPEG", quality=95)
-                        ocr_inputs.append(tmp_img.name)
-                        temp_image_files.append(tmp_img.name)
-            except Exception as e:
-                # Jika gagal convert (misal poppler tidak ada), log dan fallback atau raise?
-                # User minta convert, jadi kita raise error jika gagal
-                raise Exception(f"Gagal convert PDF ke Image: {str(e)}. Pastikan poppler-utils terinstall.")
-        else:
-            # Jika bukan PDF (sudah image), langsung pakai
-            ocr_inputs.append(input_to_model)
-
         # Proses OCR
-        print_with_time(f"OCR Document ({len(ocr_inputs)} files)...")
+        print_with_time("OCR Document...")
         ocr_pipeline = get_pipeline()
-        
-        all_outputs = []
-        for inp_path in ocr_inputs:
-            # Predict per file
-            output = ocr_pipeline.predict(input=inp_path)
-            all_outputs.extend(output)
+        output = ocr_pipeline.predict(input=input_to_model)
 
         print_with_time("Extract Markdown...")
         markdown_list = []
-        for res in all_outputs:
+        for res in output:
             markdown_list.append(res.markdown)
 
         full_markdown_text = ocr_pipeline.concatenate_markdown_pages(markdown_list)
@@ -229,8 +197,6 @@ async def document_parsing(
     finally:
         print_with_time("Bersihkan file temporary...")
         paths_to_clean = [p for p in [temp_file_path, processed_file_path] if p]
-        paths_to_clean.extend(temp_image_files)
-        
         for path in paths_to_clean:
             if path and os.path.exists(path):
                 try:
