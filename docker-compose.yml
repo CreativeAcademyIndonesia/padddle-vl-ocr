@@ -20,8 +20,16 @@ services:
 
     volumes:
       - .:/app
-      - Z:/gcc/uploads:/app/storage
+      - remote_storage:/app/storage
       
     command: uvicorn app:app --host 0.0.0.0 --port 8000
     
     restart: unless-stopped
+
+volumes:
+  remote_storage:
+    driver: local
+    driver_opts:
+      type: cifs
+      o: "username=Administrator,password=Cileunyi@19,vers=3.0,file_mode=0777,dir_mode=0777"
+      device: "//10.8.0.108/portal_storage/gcc/uploads"
