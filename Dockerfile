@@ -2,9 +2,15 @@ FROM ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:latest-gpu-s
 
 USER root
 
+ENV TZ=Asia/Jakarta
+
 RUN mkdir -p /var/lib/apt/lists/partial && \
     apt-get update && \
-    apt-get install -y poppler-utils && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        tzdata \
+        poppler-utils && \
+    ln -fs /usr/share/zoneinfo/Asia/Jakarta /etc/localtime && \
+    dpkg-reconfigure -f noninteractive tzdata && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

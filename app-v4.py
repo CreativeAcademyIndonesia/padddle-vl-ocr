@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Dict, List
 from pypdf import PdfReader, PdfWriter
-import fitz  # PyMuPDF
+from pdf2image import convert_from_path
 
 app = FastAPI(title="PaddleOCR-VL API")
 
@@ -22,14 +22,9 @@ def print_with_time(message: str):
     timestamp = datetime.now().strftime("%H:%M")
     print(f"{timestamp} {message}")
 
-# Setup folder untuk output file yang bisa didownload
 OUTPUT_DIR = "outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# Mount folder outputs agar bisa diakses via URL (misal: http://host/outputs/filename.md)
 app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
-
-# Global variable untuk pipeline
 pipeline = None
 
 def get_pipeline():
@@ -115,51 +110,49 @@ async def document_parsing(
             
             input_to_model = saved_file_path
             
-            # --- KONVERSI FULL PDF KE IMAGE (PyMuPDF) ---
-            print_with_time("Konversi FULL PDF ke Image High Res (300 DPI) via PyMuPDF...")
+            # --- KONVERSI FULL PDF KE IMAGE ---
+            # Tidak ada lagi slicing PDF sebelumnya
+            print_with_time("Konversi FULL PDF ke Image High Res (300 DPI)...")
             
             try:
-                # Open PDF dengan PyMuPDF
-                doc = fitz.open(input_to_model)
-                print_with_time(f"Total halaman PDF: {len(doc)}")
+                # Convert SELURUH halaman PDF ke images
+                # Gunakan dpi=300 untuk high resolution
+                # fmt="png" akan memaksa poppler menggunakan format lossless internal
+                images = convert_from_path(input_to_model, dpi=300, fmt="png", thread_count=4)
+                print_with_time(f"Berhasil convert total {len(images)} halaman ke gambar.")
                 
                 original_stem = Path(file.filename).stem
                 
-                # Matrix untuk resolusi 300 DPI
-                # Default 72 DPI -> zoom = 300/72 ~= 4.167
-                zoom = 300 / 72
-                matrix = fitz.Matrix(zoom, zoom)
-                
-                for i in range(len(doc)):
-                    page = doc.load_page(i)
-                    pix = page.get_pixmap(matrix=matrix, alpha=False) # alpha=False -> RGB, no transparency
-                    
-                    # Format nama file image: filename_page_{i+1}.png
+                for i, img in enumerate(images):
+                    # Format nama file image: filename_page_{i+1}.png (Gunakan PNG)
+                    # Page number di filename mulai dari 1
                     page_num = i + 1
                     image_filename = f"{original_stem}_page_{page_num}.png"
                     image_path = os.path.join(img_dir, image_filename)
                     
-                    # Simpan sebagai PNG
-                    pix.save(image_path)
+                    # Simpan dengan metadata DPI 300, Format PNG (Lossless)
+                    # PNG lebih baik untuk OCR daripada JPEG karena tidak ada artefak kompresi
+                    img.save(image_path, "PNG", dpi=(300, 300))
                     
                     # Simpan path dengan info halaman untuk filtering nanti
                     all_image_paths.append({
                         "path": image_path,
                         "page_num": page_num
                     })
-                
-                print_with_time(f"Berhasil convert {len(doc)} halaman ke gambar.")
-                doc.close()
                     
             except Exception as e:
-                raise Exception(f"Gagal convert PDF ke Image dengan PyMuPDF: {str(e)}")
+                raise Exception(f"Gagal convert PDF ke Image: {str(e)}. Pastikan poppler-utils terinstall.")
             
             # --- FILTER IMAGE UNTUK OCR ---
+            # Pilih image mana saja yang akan masuk pipeline OCR berdasarkan input user
             if pages:
                 try:
                     pages_list = json.loads(pages)
                     if isinstance(pages_list, list) and len(pages_list) > 0:
                         print_with_time(f"Filtering halaman untuk OCR: {pages_list}")
+                        # User input page numbers (1-based index)
+                        # Kita ambil image yang page_num-nya ada di list user
+                        
                         target_pages = set(pages_list)
                         for img_info in all_image_paths:
                             if img_info["page_num"] in target_pages:
@@ -169,11 +162,13 @@ async def document_parsing(
                              print_with_time("Warning: Tidak ada halaman yang cocok dengan filter user. Menggunakan semua halaman.")
                              ocr_inputs = [x["path"] for x in all_image_paths]
                     else:
+                        # List kosong atau invalid format, pakai semua
                         ocr_inputs = [x["path"] for x in all_image_paths]
                 except Exception as e:
                     print_with_time(f"Gagal parse filter halaman, memproses semua: {e}")
                     ocr_inputs = [x["path"] for x in all_image_paths]
             else:
+                # Tidak ada filter, proses semua
                 ocr_inputs = [x["path"] for x in all_image_paths]
 
         else:
@@ -183,6 +178,7 @@ async def document_parsing(
                 shutil.copyfileobj(file.file, f)
             
             ocr_inputs = [saved_file_path]
+            # Untuk image upload, all_image_paths juga diisi agar info returned lengkap
             all_image_paths.append({"path": saved_file_path, "page_num": 1})
 
         # Proses OCR
@@ -194,10 +190,12 @@ async def document_parsing(
             # Predict per file
             output = ocr_pipeline.predict(input=inp_path)
             
-            # Save markdown per page
+            # Save markdown per page seperti dokumentasi PaddleOCR-VL
+            # Kita simpan di folder 'markdown_pages' di dalam folder tanggal
             markdown_pages_dir = os.path.join(base_path, "markdown_pages")
             os.makedirs(markdown_pages_dir, exist_ok=True)
             
+            # Loop setiap result di output (biasanya 1 per file image input)
             for res in output:
                 res.save_to_markdown(save_path=markdown_pages_dir)
                 

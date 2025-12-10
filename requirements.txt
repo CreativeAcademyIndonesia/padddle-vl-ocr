@@ -2,4 +2,5 @@ fastapi
 uvicorn
 python-multipart
 pypdf
+pymupdf
 pdf2image
