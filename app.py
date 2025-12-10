@@ -136,7 +136,7 @@ async def document_parsing(
                         image_path, 
                         "JPEG", 
                         dpi=(300, 300), 
-                        quality=85, 
+                        quality=95, 
                         optimize=True, 
                         subsampling=2
                     )
@@ -193,8 +193,8 @@ async def document_parsing(
         ocr_pipeline = get_pipeline()
         
         all_outputs = []
-        for inp_path in ocr_inputs:
-            # Predict per file
+        for idx, inp_path in enumerate(ocr_inputs, start=1):
+            print_with_time(f"Processing file {idx} of {len(ocr_inputs)}: {inp_path}")
             output = ocr_pipeline.predict(input=inp_path)
             
             # Save markdown per page seperti dokumentasi PaddleOCR-VL
