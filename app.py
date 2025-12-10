@@ -24,7 +24,9 @@ def print_with_time(message: str):
 
 OUTPUT_DIR = os.path.join("storage", "agen", "production-note", "outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
+
+MOUNT_PATH = "/storage/agen/production-note/outputs"
+app.mount(MOUNT_PATH, StaticFiles(directory=OUTPUT_DIR), name="outputs")
 pipeline = None
 
 def get_pipeline():
@@ -233,20 +235,13 @@ async def document_parsing(
         print_with_time("Generate Full Download URL...")
         base_url = str(request.base_url).rstrip("/")
         rel_path = os.path.relpath(output_filepath, OUTPUT_DIR).replace("\\", "/")
-        download_url = f"{base_url}/outputs/{rel_path}"
+        download_url = f"{base_url}{MOUNT_PATH}/{rel_path}"
 
         # URL untuk file image yang disimpan (SEMUA converted images, bukan cuma yg di-OCR)
         stored_images_info = []
         for img_info in all_image_paths:
-             # OUTPUT_DIR = "storage/agen/production-note/outputs"
-             # img_info["path"] = "storage/agen/production-note/outputs/2025/2025.12.10/image/file.jpg"
-             # os.path.relpath akan menghasilkan path relatif dari OUTPUT_DIR ke file
-             # misal: "2025/2025.12.10/image/file.jpg"
-             # Jadi ini sudah benar, karena StaticFiles dimount ke /outputs
-             # yang artinya http://host/outputs/X akan mencari file di OUTPUT_DIR/X
-             
              rel = os.path.relpath(img_info["path"], OUTPUT_DIR).replace("\\", "/")
-             stored_images_info.append(f"{base_url}/outputs/{rel}")
+             stored_images_info.append(f"{base_url}{MOUNT_PATH}/{rel}")
 
         # URL untuk file markdown per halaman (stored_readme)
         stored_markdown = []
@@ -259,7 +254,7 @@ async def document_parsing(
              
              if os.path.exists(md_path):
                  rel = os.path.relpath(md_path, OUTPUT_DIR).replace("\\", "/")
-                 stored_markdown.append(f"{base_url}/outputs/{rel}")
+                 stored_markdown.append(f"{base_url}{MOUNT_PATH}/{rel}")
 
         return create_response(
             success=True, 
