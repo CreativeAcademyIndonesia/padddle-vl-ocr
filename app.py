@@ -117,27 +117,28 @@ async def document_parsing(
             try:
                 # Convert SELURUH halaman PDF ke images
                 # Gunakan dpi=300 untuk high resolution
-                # fmt="png" untuk matching request user
-                images = convert_from_path(input_to_model, dpi=300, fmt="png", thread_count=4)
+                # fmt="jpeg" untuk matching request user
+                images = convert_from_path(input_to_model, dpi=300, fmt="jpeg", thread_count=4)
                 print_with_time(f"Berhasil convert total {len(images)} halaman ke gambar.")
                 
                 original_stem = Path(file.filename).stem
                 
                 for i, img in enumerate(images):
-                    # Format nama file image: filename_page_{i+1}.png
+                    # Format nama file image: filename_page_{i+1}.jpg
                     # Page number di filename mulai dari 1
                     page_num = i + 1
-                    image_filename = f"{original_stem}_page_{page_num}.png"
+                    image_filename = f"{original_stem}_page_{page_num}.jpg"
                     image_path = os.path.join(img_dir, image_filename)
                     
-                    # Simpan dengan metadata DPI 300, Format PNG
-                    # Setting sesuai request: quality=95, optimize=True
+                    # Simpan dengan metadata DPI 300, Format JPEG
+                    # Setting sesuai request: Baseline DCT, Huffman coding, YCbCr4:2:0
                     img.save(
                         image_path, 
-                        "PNG", 
+                        "JPEG", 
                         dpi=(300, 300), 
-                        quality=95, 
-                        optimize=True
+                        quality=85, 
+                        optimize=True, 
+                        subsampling=2
                     )
                     
                     # Simpan path dengan info halaman untuk filtering nanti
