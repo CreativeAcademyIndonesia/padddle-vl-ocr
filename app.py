@@ -258,14 +258,19 @@ async def document_parsing(
         stored_markdown = []
         markdown_pages_base = os.path.join(base_path, "markdown_pages")
         
-        for inp_path in ocr_inputs:
-             stem = Path(inp_path).stem
+        # Iterasi semua halaman (bukan cuma yg di-OCR) agar index sinkron dengan stored_images
+        for img_info in all_image_paths:
+             img_path = img_info["path"]
+             stem = Path(img_path).stem
              md_filename = f"{stem}.md"
              md_path = os.path.join(markdown_pages_base, md_filename)
              
              if os.path.exists(md_path):
                  rel = os.path.relpath(md_path, OUTPUT_DIR).replace("\\", "/")
                  stored_markdown.append(f"{base_url}{MOUNT_PATH}/{rel}")
+             else:
+                 # Jika tidak ada markdown (kena filter atau gagal), isi string kosong
+                 stored_markdown.append("")
 
         return create_response(
             success=True, 
