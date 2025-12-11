@@ -114,6 +114,12 @@ async def document_parsing(
             
             # --- KONVERSI FULL PDF KE IMAGE ---
             # Tidak ada lagi slicing PDF sebelumnya
+
+            # Cek koneksi sebelum proses berat
+            if await request.is_disconnected():
+                print_with_time("Client disconnected! Membatalkan proses konversi PDF.")
+                return create_response(success=False, message="Request cancelled")
+
             print_with_time("Konversi FULL PDF ke Image High Res (300 DPI)...")
             
             try:
@@ -196,6 +202,11 @@ async def document_parsing(
         
         all_outputs = []
         for idx, inp_path in enumerate(ocr_inputs, start=1):
+            # Cek koneksi di setiap iterasi halaman
+            if await request.is_disconnected():
+                print_with_time("Client disconnected! Membatalkan proses OCR.")
+                return create_response(success=False, message="Request cancelled")
+
             print_with_time(f"Processing file {idx} of {len(ocr_inputs)}: {inp_path}")
             output = ocr_pipeline.predict(input=inp_path)
             
